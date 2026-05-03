@@ -2,37 +2,13 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
-  Layout, 
-  Users, 
-  Trophy, 
-  PlusCircle, 
-  ChevronLeft, 
-  ChevronRight,
-  Calendar as CalendarIcon,
-  Play,
-  Info,
-  Loader2,
-  Search,
-  Bell,
-  Crown,
-  User as UserIcon,
-  Share2,
-  AlertTriangle,
-  Check,
-  Flame,
-  MessageSquare,
-  Hash,
-  Settings,
-  X,
-  Save,
-  Edit2,
-  Lock
+  Users, Trophy, PlusCircle, ChevronLeft, ChevronRight, Info, Share2, AlertTriangle, Check, Flame, MessageSquare, Hash, Settings, X, Save, Edit2, Lock
 } from 'lucide-react';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot, arrayUnion, getDoc, updateDoc, deleteField } from 'firebase/firestore';
 
-// --- 1. Firebase 설정 (배포 전 본인의 키값으로 교체하세요) ---
+// --- Firebase 설정 (배포 전 본인의 키값으로 교체하세요) ---
 const firebaseConfig = {
   apiKey: "AIzaSyDd-DX7f2gYFAj70hcwTlHeT11UeIs-itg",
   authDomain: "when-we-meet-27fc2.firebaseapp.com",
@@ -57,7 +33,7 @@ export default function App() {
   const [entrySource, setEntrySource] = useState<'creator' | 'invitee'>('creator'); 
   const [nickname, setNickname] = useState('');
   
-  const [roomData, setRoomData] = useState<{ participants?: Record<string, string[]>, comments?: Record<string, {name: string, text: string}[]> }>({});
+  const [roomData, setRoomData] = useState<any>({});
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [myComments, setMyComments] = useState<Record<string, string>>({});
   const [focusedDate, setFocusedDate] = useState<string | null>(null); 
@@ -71,12 +47,11 @@ export default function App() {
   const [tempEditNickname, setTempEditNickname] = useState('');
 
   const [currentDate, setCurrentDate] = useState(new Date()); 
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState<number | null>(null); 
-  const [dragEnd, setDragEnd] = useState<number | null>(null); 
-  const [dragMode, setDragMode] = useState<'add' | 'remove' | null>(null);
-  const [tempRange, setTempRange] = useState<string[]>([]); 
   
+  // [수정] 드래그 및 터치 상태 동기화 문제 해결을 위한 Ref 도입
+  const dragRef = useRef({ isDragging: false, startIdx: -1, mode: 'add' as 'add' | 'remove', range: [] as string[] });
+  const [dragVisuals, setDragVisuals] = useState({ isDragging: false, mode: 'add', range: [] as string[] });
+
   const calendarGridRef = useRef<HTMLDivElement>(null);
 
   const year = currentDate.getFullYear();
@@ -88,12 +63,13 @@ export default function App() {
   const formatDate = (y: number, m: number, d: number) => `${y}-${(m + 1).toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
   const getDayLabel = (y: number, m: number, d: number) => ['일', '월', '화', '수', '목', '금', '토'][new Date(y, m, d).getDay()];
 
-  useEffect(() => {
-    if (view === 'home') {
-      setRoomName('');
-      setIsEditMode(false);
-    }
-  }, [view]);
+  // [신규] 오늘 날짜 및 지난 날짜 계산 로직
+  const todayObj = new Date();
+  todayObj.setHours(0, 0, 0, 0);
+  const todayStr = formatDate(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
+  const isPastDate = (y: number, m: number, d: number) => new Date(y, m, d).getTime() < todayObj.getTime();
+
+  useEffect(() => { if (view === 'home') { setRoomName(''); setIsEditMode(false); } }, [view]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -148,9 +124,7 @@ export default function App() {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
     try {
       const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newId);
-      await setDoc(roomDocRef, {
-        name: roomName, createdAt: new Date().toISOString(), participants: {}, comments: {}
-      });
+      await setDoc(roomDocRef, { name: roomName, createdAt: new Date().toISOString(), participants: {}, comments: {} });
       const newMeeting = { id: newId, name: roomName, role: '방장', members: 1, lastActive: '방금 전', savedNickname: '방장' };
       const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
       await setDoc(historyDocRef, { meetings: arrayUnion(newMeeting) }, { merge: true });
@@ -167,8 +141,8 @@ export default function App() {
   const enterRoom = () => {
     if (roomData?.participants?.[nickname]) setSelectedDates(roomData.participants[nickname]);
     const oldComments: Record<string, string> = {};
-    Object.entries(roomData?.comments || {}).forEach(([date, list]) => {
-      const myC = list.find(c => c.name === nickname);
+    Object.entries(roomData?.comments || {}).forEach(([date, list]: any) => {
+      const myC = list.find((c: any) => c.name === nickname);
       if (myC) oldComments[date] = myC.text;
     });
     setMyComments(oldComments); setStep(2);
@@ -181,7 +155,7 @@ export default function App() {
       const mergedComments = { ...(roomData.comments || {}) };
       
       Object.keys(mergedComments).forEach(date => {
-        mergedComments[date] = mergedComments[date].filter(c => c.name !== nickname);
+        mergedComments[date] = mergedComments[date].filter((c: any) => c.name !== nickname);
       });
 
       Object.entries(myComments).forEach(([date, text]) => {
@@ -194,21 +168,18 @@ export default function App() {
         comments: mergedComments 
       });
 
+      // [수정] 초대 링크 접속 시 히스토리 생성 로직 보강
       const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
       const historySnap = await getDoc(historyDocRef);
-      if (historySnap.exists()) {
-        const meetings = historySnap.data().meetings || [];
-        const isAlreadyInHistory = meetings.some((m: any) => m.id === currentRoomId);
-        
-        if (isAlreadyInHistory) {
-          const updatedMeetings = meetings.map((m: any) => 
-            m.id === currentRoomId ? { ...m, savedNickname: nickname } : m
-          );
-          await setDoc(historyDocRef, { meetings: updatedMeetings }, { merge: true });
-        } else {
-          const newMeeting = { id: currentRoomId, name: roomName, role: '멤버', members: Object.keys(roomData.participants || {}).length + 1, lastActive: '방금 전', savedNickname: nickname };
-          await setDoc(historyDocRef, { meetings: arrayUnion(newMeeting) }, { merge: true });
-        }
+      const meetings = historySnap.exists() ? historySnap.data().meetings || [] : [];
+      const isAlreadyInHistory = meetings.some((m: any) => m.id === currentRoomId);
+      
+      if (isAlreadyInHistory) {
+        const updatedMeetings = meetings.map((m: any) => m.id === currentRoomId ? { ...m, savedNickname: nickname } : m);
+        await setDoc(historyDocRef, { meetings: updatedMeetings }, { merge: true });
+      } else {
+        const newMeeting = { id: currentRoomId, name: roomName, role: '멤버', savedNickname: nickname };
+        await setDoc(historyDocRef, { meetings: arrayUnion(newMeeting) }, { merge: true });
       }
 
       setView('results'); showMessage("일정이 동기화되었습니다.");
@@ -236,9 +207,7 @@ export default function App() {
 
           const updatedComments = { ...oldComments };
           Object.keys(updatedComments).forEach(date => {
-            updatedComments[date] = updatedComments[date].map((c: any) => 
-              c.name === oldNickname ? { ...c, name: tempEditNickname } : c
-            );
+            updatedComments[date] = updatedComments[date].map((c: any) => c.name === oldNickname ? { ...c, name: tempEditNickname } : c);
           });
 
           await updateDoc(roomDocRef, {
@@ -254,9 +223,7 @@ export default function App() {
       if (historySnap.exists()) {
         const meetings = historySnap.data().meetings || [];
         const updatedMeetings = meetings.map((m: any) => 
-          m.id === editingMeeting.id 
-          ? { ...m, name: (editingMeeting.role === '방장' ? tempEditName : m.name), savedNickname: tempEditNickname } 
-          : m
+          m.id === editingMeeting.id ? { ...m, name: (editingMeeting.role === '방장' ? tempEditName : m.name), savedNickname: tempEditNickname } : m
         );
         await setDoc(historyDocRef, { meetings: updatedMeetings }, { merge: true });
       }
@@ -267,7 +234,6 @@ export default function App() {
       setEditingMeeting(null);
       setIsEditMode(false);
     } catch (e) { 
-      console.error(e);
       showMessage("수정 실패: 오류가 발생했습니다."); 
     }
   };
@@ -282,13 +248,11 @@ export default function App() {
 
   const getOthersAvailable = (dateStr: string) => {
     const names: string[] = [];
-    Object.entries(roomData?.participants || {}).forEach(([n, dates]) => {
+    Object.entries(roomData?.participants || {}).forEach(([n, dates]: any) => {
       if (n !== nickname && dates.includes(dateStr)) names.push(n);
     });
     return names;
   };
-
-  const getMergedCount = (dateStr: string) => getOthersAvailable(dateStr).length + (selectedDates.includes(dateStr) ? 1 : 0);
 
   const allParticipants = useMemo(() => {
     const names = new Set(Object.keys(roomData?.participants || {}));
@@ -301,7 +265,7 @@ export default function App() {
     const allDays = [];
     for (let i = 1; i <= daysInMonthCount; i++) {
       const dateStr = formatDate(year, month, i);
-      const count = getMergedCount(dateStr);
+      const count = getOthersAvailable(dateStr).length + (selectedDates.includes(dateStr) ? 1 : 0);
       if (count > 0) {
         allDays.push({
           dateStr, date: `${(month + 1).toString().padStart(2, '0')}월 ${i.toString().padStart(2, '0')}일 (${getDayLabel(year, month, i)})`, count
@@ -317,7 +281,8 @@ export default function App() {
     const daysInMonthCount = getDaysInMonth(year, month);
     for (let i = 1; i <= daysInMonthCount; i++) {
       const dateStr = formatDate(year, month, i);
-      if (getMergedCount(dateStr) === totalCount - 1) {
+      const count = getOthersAvailable(dateStr).length + (selectedDates.includes(dateStr) ? 1 : 0);
+      if (count === totalCount - 1) {
         const available = [...getOthersAvailable(dateStr)];
         if (selectedDates.includes(dateStr)) available.push(nickname);
         const missing = allParticipants.find(p => !available.includes(p));
@@ -335,37 +300,54 @@ export default function App() {
   const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
   const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
 
-  const getIndexFromDate = (dateStr: string) => parseInt(dateStr.split('-')[2], 10) - 1;
-  const getDateFromIndex = (index: number) => formatDate(year, month, index + 1);
-
+  // [수정] 즉각적인 반응과 버그 없는 드래그/선택을 위한 동기화 로직 교체
   const startDragging = (dateStr: string) => {
-    const index = getIndexFromDate(dateStr);
+    const idx = parseInt(dateStr.split('-')[2], 10) - 1;
     const mode = selectedDates.includes(dateStr) ? 'remove' : 'add';
-    setIsDragging(true); setDragStart(index); setDragEnd(index); setDragMode(mode); setTempRange([dateStr]); setFocusedDate(dateStr);
+    const range = [dateStr];
+
+    dragRef.current = { isDragging: true, startIdx: idx, mode, range };
+    setDragVisuals({ isDragging: true, mode, range });
+    setFocusedDate(dateStr);
   };
 
   const moveDragging = (clientX: number, clientY: number) => {
-    if (!isDragging || dragStart === null) return;
+    if (!dragRef.current.isDragging) return;
     const element = document.elementFromPoint(clientX, clientY);
-    const dateStr = element?.closest('[data-date]')?.getAttribute('data-date');
-    if (dateStr) {
-      const currentIndex = getIndexFromDate(dateStr);
-      if (currentIndex !== dragEnd) {
-        setDragEnd(currentIndex);
-        const min = Math.min(dragStart, currentIndex); const max = Math.max(dragStart, currentIndex);
-        const range = []; for (let i = min; i <= max; i++) range.push(getDateFromIndex(i));
-        setTempRange(range); setFocusedDate(dateStr);
+    const ds = element?.closest('[data-date]')?.getAttribute('data-date');
+    if (ds) {
+      const curIdx = parseInt(ds.split('-')[2], 10) - 1;
+      const startIdx = dragRef.current.startIdx;
+      const min = Math.min(startIdx, curIdx); 
+      const max = Math.max(startIdx, curIdx);
+      const range = []; 
+      
+      for (let i = min; i <= max; i++) {
+        // 드래그 중에도 지나간 날짜는 무시
+        if (!isPastDate(year, month, i + 1)) {
+          range.push(formatDate(year, month, i + 1));
+        }
+      }
+
+      if (range.length !== dragRef.current.range.length || range[0] !== dragRef.current.range[0] || range[range.length-1] !== dragRef.current.range[dragRef.current.range.length-1]) {
+        dragRef.current.range = range;
+        setDragVisuals({ isDragging: true, mode: dragRef.current.mode, range });
+        setFocusedDate(ds);
       }
     }
   };
 
   const stopDragging = () => {
-    if (!isDragging || dragStart === null) return;
+    if (!dragRef.current.isDragging) return;
+    const { mode, range } = dragRef.current;
+    
     setSelectedDates(prev => {
-      if (dragMode === 'add') return Array.from(new Set([...prev, ...tempRange]));
-      return prev.filter(d => !tempRange.includes(d));
+      if (mode === 'add') return Array.from(new Set([...prev, ...range]));
+      return prev.filter(d => !range.includes(d));
     });
-    setIsDragging(false); setDragStart(null); setDragEnd(null); setDragMode(null); setTempRange([]);
+
+    dragRef.current = { isDragging: false, startIdx: -1, mode: 'add', range: [] };
+    setDragVisuals({ isDragging: false, mode: 'add', range: [] });
   };
 
   const handleMeetingClick = (m: any) => {
@@ -390,16 +372,14 @@ export default function App() {
           <div className="w-full max-w-md px-6 animate-in slide-in-from-right-4 duration-500 text-left">
             <div className="mb-10 px-1 text-center font-bold">
               <h1 className="text-6xl font-black text-white tracking-tighter leading-none mb-4 drop-shadow-2xl">우리 <span className="text-[#66c0f4]">언제</span> 봄?</h1>
-              <div className="flex flex-col items-center">
-                <p className="text-[15px] text-[#66c0f4] font-black uppercase tracking-[0.3em] drop-shadow-sm">언제 볼래 날짜만 정해</p>
-              </div>
+              <p className="text-[15px] text-[#66c0f4] font-black uppercase tracking-[0.3em] drop-shadow-sm">언제 볼래 날짜만 정해</p>
             </div>
 
             <div className="bg-[#1b2838] border-t-2 border-[#66c0f4] p-8 rounded-sm shadow-2xl space-y-6 relative overflow-hidden group mt-6">
               <div className="space-y-4 relative z-10 text-left">
                 <div className="space-y-2">
                   <label className="text-[11px] font-black text-[#c7d5e0]/30 uppercase tracking-widest block font-bold">새 모임 이름</label>
-                  <input type="text" placeholder="예: 인수 맛있는거 사주는 모임" className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" value={roomName} onChange={(e) => setRoomName(e.target.value)} />
+                  <input type="text" placeholder="예: 맛있는거 사주는 모임" className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" value={roomName} onChange={(e) => setRoomName(e.target.value)} />
                 </div>
               </div>
               <button onClick={createMeeting} disabled={!roomName || !user} className="w-full bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white font-black py-5 rounded-sm uppercase tracking-widest shadow-xl active:scale-95 disabled:opacity-30 transition-all flex items-center justify-center gap-3 font-bold">
@@ -409,7 +389,7 @@ export default function App() {
 
             {!isLoading && myMeetings.length > 0 && (
               <div className="mt-14 space-y-6 text-left font-bold animate-in fade-in slide-in-from-bottom-4 duration-700">
-                <div className="flex items-center gap-3 mb-6 px-1 border-l-4 border-[#66c0f4]/50 pl-4 relative font-bold">
+                <div className="flex items-center gap-3 mb-6 px-1 border-l-4 border-[#66c0f4]/50 pl-4 relative">
                   <Hash size={18} className="text-[#66c0f4]" />
                   <h3 className="text-[15px] font-black text-white uppercase tracking-[0.15em]">내 약속</h3>
                   <div className="bg-[#2a475e] text-[#66c0f4] text-[10px] px-2.5 py-0.5 rounded-sm font-black border border-[#66c0f4]/20 shadow-inner">
@@ -535,14 +515,35 @@ export default function App() {
                   <div className="grid grid-cols-7 gap-1.5 font-bold" ref={calendarGridRef}>
                     {Array.from({length: getFirstDayOfMonth(year, month)}, (_, i) => <div key={`pad-${i}`} />)}
                     {Array.from({length: getDaysInMonth(year, month)}, (_, i) => {
-                      const dayNum = i + 1; const dateStr = formatDate(year, month, dayNum);
-                      const active = selectedDates.includes(dateStr) || (isDragging && tempRange.includes(dateStr) && dragMode === 'add');
-                      const count = getMergedCount(dateStr);
+                      const dayNum = i + 1; 
+                      const dateStr = formatDate(year, month, dayNum);
+                      
+                      // [추가] 오늘 및 지난 날짜 필터링 변수 적용
+                      const isPast = isPastDate(year, month, dayNum);
+                      const isToday = dateStr === todayStr;
+
+                      // 시각적 동기화 개선
+                      const isSelected = selectedDates.includes(dateStr);
+                      const inDragRange = dragVisuals.isDragging && dragVisuals.range.includes(dateStr);
+                      const displayActive = inDragRange ? dragVisuals.mode === 'add' : isSelected;
+                      
                       const othersCount = getOthersAvailable(dateStr).length;
+                      const displayCount = othersCount + (displayActive ? 1 : 0);
+
                       return (
-                        <div key={i} data-date={dateStr} onMouseDown={(e) => { e.preventDefault(); startDragging(dateStr); }} onTouchStart={(e) => { if (e.cancelable) e.preventDefault(); startDragging(dateStr); }} 
-                          className={`aspect-square flex flex-col items-center justify-between py-2 rounded-sm transition-all border border-transparent font-bold ${active ? 'bg-[#66c0f4] text-[#171a21] border-[#66c0f4] scale-105 z-10 shadow-lg font-bold' : othersCount >= 3 ? 'bg-[#47bfff]/20 text-[#66c0f4] font-bold' : 'bg-[#2a3f5a] font-bold'}`}>
-                          <span className="text-xs font-black pointer-events-none font-bold">{dayNum}</span><span className={`text-[8px] font-black pointer-events-none mt-auto font-bold ${active ? 'text-[#171a21]' : 'text-[#66c0f4]'}`}>{count > 0 ? `${count}명` : ''}</span>
+                        <div key={i} data-date={dateStr} 
+                          onMouseDown={(e) => { if(!isPast) { e.preventDefault(); startDragging(dateStr); } }} 
+                          onTouchStart={(e) => { if(!isPast) { if (e.cancelable) e.preventDefault(); startDragging(dateStr); } }} 
+                          className={`aspect-square relative flex flex-col items-center justify-between py-2 rounded-sm transition-all border border-transparent font-bold 
+                          ${isPast ? 'opacity-30 bg-transparent text-[#4d5254] cursor-not-allowed' : 
+                            displayActive ? 'bg-[#66c0f4] text-[#171a21] shadow-lg' : 
+                            displayCount >= 3 ? 'bg-[#47bfff]/20 text-[#66c0f4]' : 'bg-[#2a3f5a]'}`}>
+                          
+                          {/* 오늘 날짜 빨간 점 표시 */}
+                          {isToday && <span className={`absolute top-1.5 left-1.5 w-1.5 h-1.5 rounded-full ${displayActive ? 'bg-[#171a21]' : 'bg-red-400'}`}></span>}
+
+                          <span className={`text-xs font-black pointer-events-none ${isToday && !displayActive ? 'text-red-400' : ''}`}>{dayNum}</span>
+                          <span className={`text-[8px] font-black pointer-events-none mt-auto ${displayActive ? 'text-[#171a21]' : 'text-[#66c0f4]'}`}>{displayCount > 0 ? `${displayCount}명` : ''}</span>
                         </div>
                       );
                     })}
@@ -557,7 +558,7 @@ export default function App() {
                          <div className="mt-4 pt-4 border-t border-white/5 text-nowrap font-bold"><div className="flex items-center gap-2 mb-2 font-bold"><MessageSquare size={12} className="text-[#66c0f4]" /><span className="text-[10px] text-[#c7d5e0]/50 font-black uppercase font-bold">한 줄 코멘트 남기기</span></div><input type="text" placeholder="예: 이 날 점심 먹고 가능할듯" className="w-full bg-[#171a21] border border-white/5 text-white rounded-sm p-3 text-xs outline-none focus:border-[#66c0f4]/50 transition-all font-bold placeholder:text-[#4d5254] font-bold" value={myComments[focusedDate] || ''} onChange={(e) => setMyComments({...myComments, [focusedDate]: e.target.value})} maxLength={30} /></div>
                        )}
                     </div>
-                  ) : (<div className="text-center py-6 opacity-30 flex flex-col items-center gap-3 font-bold"><Info size={20} /><p className="text-[10px] font-black uppercase tracking-[0.2em] text-nowrap font-bold">날짜를 눌러 의견을 남겨보세요</p></div>)}
+                  ) : (<div className="text-center py-6 opacity-30 flex flex-col items-center gap-3 font-bold"><Info size={20} /><p className="text-[10px] font-black uppercase tracking-[0.2em] text-nowrap font-bold font-bold">날짜를 눌러 의견을 남겨보세요</p></div>)}
                 </div>
                 <button onClick={saveSchedule} className="w-full bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white font-black py-5 rounded-sm uppercase tracking-widest shadow-xl active:scale-95 transition-all font-bold text-center font-bold">저장하기</button>
               </div>
@@ -599,11 +600,11 @@ export default function App() {
                           <div className="flex items-center gap-6 text-left font-bold font-bold">
                             <div className={`w-14 h-14 rounded-sm flex items-center justify-center font-black text-3xl font-bold ${isFullAttendance ? 'bg-[#47bfff] text-[#171a21]' : (idx === 0 ? 'bg-[#66c0f4] text-[#171a21]' : 'bg-[#2a475e] text-[#c7d5e0]')}`}>{idx + 1}</div>
                             <div className="text-left font-bold relative flex-1 font-bold">
-                              <div className="flex items-center gap-2 font-bold"><p className="text-xl text-white font-black text-left leading-tight font-bold">{item.date}</p>{isFullAttendance && <Flame size={18} className="text-[#47bfff] animate-pulse font-bold" />}</div>
+                              <div className="flex items-center gap-2 font-bold"><p className="text-xl text-white font-black text-left leading-tight font-bold">{item.date}</p>{isFullAttendance && <Flame size={18} className="text-[#47bfff] animate-pulse" />}</div>
                               <p className={`text-[11px] font-black uppercase text-left tracking-wide mt-1 font-bold ${isFullAttendance ? 'text-[#47bfff]' : 'text-[#66c0f4]'} font-bold`}>{isFullAttendance ? '전원 참여 가능 🔥' : `${item.count}명 참여 가능`}</p>
                             </div>
                           </div>
-                          {dayComments.length > 0 && (<div className="mt-2 space-y-2 border-t border-white/5 pt-4 font-bold font-bold"><div className="flex flex-col gap-2">{dayComments.map((c, i) => (<div key={i} className="flex gap-2 items-start whitespace-normal font-bold font-bold"><span className="text-[10px] text-[#66c0f4] font-black shrink-0 mt-0.5 font-bold font-bold">[{c.name}]</span><span className="text-[11px] text-[#c7d5e0]/60 font-bold leading-relaxed font-bold font-bold">{c.text}</span></div>))}</div></div>)}
+                          {dayComments.length > 0 && (<div className="mt-2 space-y-2 border-t border-white/5 pt-4 font-bold font-bold"><div className="flex flex-col gap-2">{dayComments.map((c: any, i: number) => (<div key={i} className="flex gap-2 items-start whitespace-normal font-bold font-bold"><span className="text-[10px] text-[#66c0f4] font-black shrink-0 mt-0.5 font-bold font-bold">[{c.name}]</span><span className="text-[11px] text-[#c7d5e0]/60 font-bold leading-relaxed font-bold font-bold">{c.text}</span></div>))}</div></div>)}
                       </div>
                     );
                  })}
@@ -618,7 +619,7 @@ export default function App() {
         )}
       </main>
 
-      {toast.show && (<div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-6 duration-300 font-bold font-bold"><div className="bg-[#47bfff] text-[#171a21] px-8 py-4 rounded-sm font-black shadow-2xl flex items-center gap-4 border-l-8 border-white font-bold font-bold"><Info size={20} /> <span className="text-sm font-bold text-nowrap font-bold font-bold">{toast.message}</span></div></div>)}
+      {toast.show && (<div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-6 duration-300 font-bold font-bold"><div className="bg-[#47bfff] text-[#171a21] px-8 py-4 rounded-sm font-black shadow-2xl flex items-center gap-4 border-l-8 border-white font-bold font-bold font-bold"><Info size={20} /> <span className="text-sm font-bold text-nowrap font-bold font-bold">{toast.message}</span></div></div>)}
 
       <style>{`
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
