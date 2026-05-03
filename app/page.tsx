@@ -19,7 +19,8 @@ import {
   Save, 
   Edit2, 
   Lock, 
-  Trash2
+  Trash2,
+  CalendarDays
 } from 'lucide-react';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -40,6 +41,29 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = "when-we-meet-prod";
+
+// --- 유저 고유 색상 팔레트 생성기 ---
+const PALETTE = [
+  '#F87171', // Red 400
+  '#FB923C', // Orange 400
+  '#FBBF24', // Amber 400
+  '#34D399', // Emerald 400
+  '#22D3EE', // Cyan 400
+  '#60A5FA', // Blue 400
+  '#A78BFA', // Violet 400
+  '#E879F9', // Fuchsia 400
+  '#F472B6', // Pink 400
+  '#A3E635'  // Lime 400
+];
+
+const getUserColor = (name: string) => {
+  if (!name) return '#66c0f4';
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return PALETTE[Math.abs(hash) % PALETTE.length];
+};
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -66,6 +90,9 @@ export default function App() {
 
   const [currentDate, setCurrentDate] = useState(new Date()); 
   const urlProcessedRef = useRef(false);
+  
+  // 전체 결과 달력 토글 상태
+  const [showFullCalendar, setShowFullCalendar] = useState(false);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -81,11 +108,20 @@ export default function App() {
   const todayStr = formatDate(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
   const isPastDate = (y: number, m: number, d: number) => new Date(y, m, d).getTime() < todayObj.getTime();
 
-  // [기능 추가] 데이터를 완벽하게 리셋하고 홈으로 돌아가는 함수
+  // 환경에 따른 URL 업데이트 에러 방지 유틸리티
+  const updateUrl = (roomId?: string) => {
+    try {
+      const url = roomId 
+        ? `?roomId=${roomId}`
+        : window.location.pathname;
+      window.history.replaceState(null, '', url);
+    } catch (e) {
+      console.warn("URL 업데이트가 차단되었습니다 (미리보기 환경 등):", e);
+    }
+  };
+
   const goToHome = () => {
-    const newUrl = `${window.location.origin}${window.location.pathname}`;
-    window.history.replaceState({ path: newUrl }, '', newUrl);
-    
+    updateUrl(); 
     setView('home');
     setRoomName('');
     setNickname('');
@@ -93,7 +129,16 @@ export default function App() {
     setMyComments({});
     setCurrentRoomId('');
     setIsEditMode(false);
+    setShowFullCalendar(false);
   };
+
+  useEffect(() => { 
+    if (view === 'home') { 
+      setRoomName(''); 
+      setIsEditMode(false); 
+      setShowFullCalendar(false);
+    } 
+  }, [view]);
 
   useEffect(() => { 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => { 
@@ -103,17 +148,13 @@ export default function App() {
     return () => unsubscribe(); 
   }, []);
 
-  // [수정] DB에서 날짜 데이터를 확실히 가져와서 화면에 복구하는 핵심 함수
   const loadRoomDataAndEnter = async (rId: string, nick: string, rName: string) => {
     setCurrentRoomId(rId);
     setNickname(nick);
     if (rName) setRoomName(rName);
 
-    // 주소창 업데이트 (새로고침 대비)
-    const newUrl = `${window.location.origin}${window.location.pathname}?roomId=${rId}`;
-    window.history.replaceState({ path: newUrl }, '', newUrl);
+    updateUrl(rId); 
 
-    // DB 데이터 강제 호출
     const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rId);
     const roomSnap = await getDoc(roomDocRef);
     
@@ -122,14 +163,15 @@ export default function App() {
       setRoomData(data);
       if (data.name) setRoomName(data.name);
 
-      // 내 날짜 배열 셋팅
-      if (data.participants?.[nick]) {
-        setSelectedDates(data.participants[nick]);
+      if (data.participants?.[nick] && data.participants[nick].length > 0) {
+        const existingDates = data.participants[nick];
+        setSelectedDates(existingDates);
+        setFocusedDate(existingDates[existingDates.length - 1]); 
       } else {
         setSelectedDates([]);
+        setFocusedDate(null);
       }
 
-      // 내 코멘트 셋팅
       const oldComments: Record<string, string> = {};
       Object.entries(data.comments || {}).forEach(([date, list]: any) => {
         const myC = list.find((c: any) => c.name === nick);
@@ -139,6 +181,7 @@ export default function App() {
     } else {
       setSelectedDates([]);
       setMyComments({});
+      setFocusedDate(null);
     }
 
     setView('room');
@@ -153,7 +196,6 @@ export default function App() {
       setMyMeetings(meetings); 
       setIsLoading(false); 
 
-      // 앱 최초 로드 시 URL 파라미터 처리
       if (!urlProcessedRef.current) {
         urlProcessedRef.current = true;
         const params = new URLSearchParams(window.location.search);
@@ -162,11 +204,10 @@ export default function App() {
         if (roomIdFromUrl) {
           const joinedMeeting = meetings.find((m: any) => m.id === roomIdFromUrl);
           if (joinedMeeting) {
-            // [수정] 이미 참여중이면 데이터 모두 불러와서 바로 달력 화면으로 이동!
-            loadRoomDataAndEnter(roomIdFromUrl, joinedMeeting.savedNickname, joinedMeeting.name);
-            showMessage("참여 중인 모임으로 자동 이동했습니다.");
+            updateUrl(); 
+            setView('home');
+            showMessage("이미 참여 중인 모임입니다. 내 약속에서 확인하세요.");
           } else {
-            // 처음 온 방이면 닉네임 설정창으로!
             setCurrentRoomId(roomIdFromUrl); 
             setEntrySource('invitee'); 
             setNickname(''); 
@@ -179,7 +220,6 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // 실시간 동기화 (내가 아닌 다른 사람이 수정했을 때 룸 데이터 업데이트)
   useEffect(() => {
     if (!user || !currentRoomId) return;
     const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomId);
@@ -220,9 +260,7 @@ export default function App() {
         }) 
       }, { merge: true });
 
-      // 생성 시 주소창에 방 번호 박아주기 (새로고침 방지용)
-      const newUrl = `${window.location.origin}${window.location.pathname}?roomId=${newId}`;
-      window.history.replaceState({ path: newUrl }, '', newUrl);
+      updateUrl(newId); 
 
       setCurrentRoomId(newId); 
       setEntrySource('creator'); 
@@ -235,10 +273,13 @@ export default function App() {
   };
 
   const enterRoom = () => {
-    if (roomData?.participants?.[nickname]) {
-      setSelectedDates(roomData.participants[nickname]);
+    if (roomData?.participants?.[nickname] && roomData.participants[nickname].length > 0) {
+      const existingDates = roomData.participants[nickname];
+      setSelectedDates(existingDates);
+      setFocusedDate(existingDates[existingDates.length - 1]); 
     } else {
       setSelectedDates([]);
+      setFocusedDate(null);
     }
     
     const oldComments: Record<string, string> = {};
@@ -256,12 +297,10 @@ export default function App() {
       const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomId);
       const mergedComments = { ...(roomData.comments || {}) };
       
-      // 기존 코멘트 제거 (취소된 날짜 정리)
       Object.keys(mergedComments).forEach(date => { 
         mergedComments[date] = mergedComments[date].filter((c: any) => c.name !== nickname); 
       });
 
-      // 선택된 날짜에 대해서만 코멘트 저장
       selectedDates.forEach(date => {
         const text = myComments[date];
         if (text && text.trim()) {
@@ -393,12 +432,20 @@ export default function App() {
 
   const toggleDateSelection = (dateStr: string) => {
     if (isPastDate(year, month, parseInt(dateStr.split('-')[2]))) return;
-    setSelectedDates(prev => 
-      prev.includes(dateStr) 
-        ? prev.filter(d => d !== dateStr) 
-        : [...prev, dateStr]
-    );
-    setFocusedDate(dateStr);
+
+    const isDeselecting = selectedDates.includes(dateStr);
+    
+    if (isDeselecting) {
+      const newDates = selectedDates.filter(d => d !== dateStr);
+      setSelectedDates(newDates);
+      
+      if (focusedDate === dateStr) {
+        setFocusedDate(newDates.length > 0 ? newDates[newDates.length - 1] : null);
+      }
+    } else {
+      setSelectedDates([...selectedDates, dateStr]);
+      setFocusedDate(dateStr); 
+    }
   };
 
   const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
@@ -421,46 +468,61 @@ export default function App() {
   }, [roomData, nickname]);
 
   const topThreeDates = useMemo(() => {
-    const days = [];
-    for (let i = 1; i <= getDaysInMonth(year, month); i++) {
-      const dateStr = formatDate(year, month, i);
+    const allUniqueDates = new Set([...selectedDates]);
+    Object.values(roomData?.participants || {}).forEach((dates: any) => {
+      dates.forEach((d: string) => allUniqueDates.add(d));
+    });
+
+    const days: any[] = [];
+    Array.from(allUniqueDates).forEach((dateStr: any) => {
       const count = getOthersAvailable(dateStr).length + (selectedDates.includes(dateStr) ? 1 : 0);
       if (count > 0) {
+        const [y, m, d] = dateStr.split('-');
+        const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+        const dayLabel = ['일', '월', '화', '수', '목', '금', '토'][dateObj.getDay()];
+        
         days.push({ 
           dateStr, 
-          date: `${(month + 1).toString().padStart(2, '0')}월 ${i.toString().padStart(2, '0')}일 (${getDayLabel(year, month, i)})`, 
+          date: `${m}월 ${d}일 (${dayLabel})`, 
           count 
         });
       }
-    }
+    });
     return days.sort((a, b) => b.count - a.count).slice(0, 3);
-  }, [currentDate, selectedDates, nickname, roomData]);
+  }, [selectedDates, nickname, roomData]);
 
   const nearPerfectDate = useMemo(() => {
     const totalCount = allParticipants.length;
     if (totalCount <= 1) return null;
     
-    const daysInMonthCount = getDaysInMonth(year, month);
-    for (let i = 1; i <= daysInMonthCount; i++) {
-      const dateStr = formatDate(year, month, i);
-      const count = getOthersAvailable(dateStr).length + (selectedDates.includes(dateStr) ? 1 : 0);
+    const allUniqueDates = new Set([...selectedDates]);
+    Object.values(roomData?.participants || {}).forEach((dates: any) => {
+      dates.forEach((d: string) => allUniqueDates.add(d));
+    });
+
+    for (const dateStr of Array.from(allUniqueDates)) {
+      const count = getOthersAvailable(dateStr as string).length + (selectedDates.includes(dateStr as string) ? 1 : 0);
       
       if (count === totalCount - 1) {
-        const available = [...getOthersAvailable(dateStr)];
-        if (selectedDates.includes(dateStr)) available.push(nickname);
+        const available = [...getOthersAvailable(dateStr as string)];
+        if (selectedDates.includes(dateStr as string)) available.push(nickname);
         
         const missing = allParticipants.find(p => !available.includes(p));
         if (missing) {
+          const [y, m, d] = (dateStr as string).split('-');
+          const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+          const dayLabel = ['일', '월', '화', '수', '목', '금', '토'][dateObj.getDay()];
+
           return { 
-            dateStr, 
-            date: `${(month + 1).toString().padStart(2, '0')}월 ${i.toString().padStart(2, '0')}일 (${getDayLabel(year, month, i)})`, 
+            dateStr: dateStr as string, 
+            date: `${m}월 ${d}일 (${dayLabel})`, 
             name: missing 
           };
         }
       }
     }
     return null;
-  }, [allParticipants, selectedDates, nickname, currentDate, roomData]);
+  }, [allParticipants, selectedDates, nickname, roomData]);
 
   const handleAcceptSchedule = (dateStr: string) => {
     setSelectedDates(prev => Array.from(new Set([...prev, dateStr])));
@@ -473,7 +535,6 @@ export default function App() {
       setTempEditName(m.name); 
       setTempEditNickname(m.savedNickname);
     } else {
-      // [수정] 방을 클릭했을 때 DB 데이터 동기화 함수 실행!
       loadRoomDataAndEnter(m.id, m.savedNickname, m.name);
     }
   };
@@ -487,6 +548,82 @@ export default function App() {
     document.execCommand('copy'); 
     document.body.removeChild(dummy);
     showMessage("링크가 복사되었습니다!");
+  };
+
+  const renderCalendarGrid = (isReadonly = false) => {
+    return (
+      <div className="bg-[#171a21]/80 p-5 rounded-sm border border-black/50 shadow-inner select-none overflow-hidden font-bold">
+        <div className="grid grid-cols-7 gap-1 text-center mb-6 opacity-30 font-bold">
+          {['일','월','화','수','목','금','토'].map((d, i) => (
+            <span key={i} className="text-[10px] font-black font-bold">{d}</span>
+          ))}
+        </div>
+        
+        <div className="grid grid-cols-7 gap-1.5 font-bold">
+          {Array.from({length: getFirstDayOfMonth(year, month)}, (_, i) => (
+            <div key={`pad-${i}`} className="aspect-square" />
+          ))}
+          {Array.from({length: getDaysInMonth(year, month)}, (_, i) => {
+            const dayNum = i + 1; 
+            const dateStr = formatDate(year, month, dayNum);
+            const isPast = isPastDate(year, month, dayNum);
+            const isToday = dateStr === todayStr;
+            
+            const isSelected = selectedDates.includes(dateStr);
+            const participantsForDate = getOthersAvailable(dateStr);
+            if (isSelected) participantsForDate.push(nickname);
+
+            const totalCount = allParticipants.length > 0 ? allParticipants.length : 1;
+            const count = participantsForDate.length;
+            const ratio = count / totalCount;
+
+            let opacityStyle = {};
+            let bgClass = 'bg-[#2a3f5a]';
+            if (count > 0) {
+              if (ratio === 1) {
+                bgClass = 'bg-[#47bfff] shadow-md';
+              } else {
+                opacityStyle = { backgroundColor: `rgba(71, 191, 255, ${0.15 + (ratio * 0.5)})` };
+                bgClass = ''; 
+              }
+            }
+            
+            const borderClass = isSelected ? 'ring-2 ring-white z-10' : 'border border-transparent';
+
+            return (
+              <div 
+                key={i} 
+                data-date={dateStr} 
+                onClick={() => !isReadonly && toggleDateSelection(dateStr)} 
+                className={`aspect-square relative flex flex-col items-center justify-start pt-1 rounded-sm transition-all overflow-hidden ${bgClass} ${borderClass} ${isPast ? 'opacity-20 bg-transparent cursor-not-allowed border-none' : isReadonly ? 'cursor-default' : 'cursor-pointer active:scale-95'}`}
+                style={opacityStyle}
+              >
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-1">
+                  {isToday && !isSelected && (
+                    <span className="absolute top-1 left-1 w-1 h-1 rounded-full bg-red-400"></span>
+                  )}
+                  <span className={`text-[11px] font-black pointer-events-none mb-0.5 z-10 ${count === totalCount ? 'text-[#171a21]' : 'text-white'} ${isToday && !isSelected ? 'text-red-400' : ''}`}>
+                    {dayNum}
+                  </span>
+                  
+                  {count > 0 && (
+                    <div className="flex flex-wrap justify-center content-start gap-[2px] w-full px-1 z-10 pointer-events-none">
+                      {participantsForDate.map((pName, idx) => (
+                        <div 
+                          key={idx} 
+                          className="w-1.5 h-1.5 rounded-full shadow-sm" 
+                          style={{ backgroundColor: getUserColor(pName) }} 
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -513,7 +650,7 @@ export default function App() {
                   </label>
                   <input 
                     type="text" 
-                    placeholder="예: 인수 맛있는거 사주는 모임" 
+                    placeholder="예: 맛있는거 사주는 모임" 
                     className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" 
                     value={roomName} 
                     onChange={(e) => setRoomName(e.target.value)} 
@@ -685,17 +822,21 @@ export default function App() {
         {view === 'room' && (
           <div className="w-full max-w-md px-6 animate-in slide-in-from-right-4 duration-500 text-left font-bold">
             {step === 1 ? (
-              <div className="mt-12 flex flex-col items-center font-bold">
-                <h1 className="text-3xl font-black text-white leading-tight tracking-tighter text-center mb-6 px-4 whitespace-normal font-bold">
-                  '{roomName || '무명'}'<br />
-                  {entrySource === 'creator' ? '모임이 개설되었습니다' : '모임에 초대되었습니다'}
-                </h1>
+              <div className="mt-16 flex flex-col items-center font-bold w-full">
+                <div className="mb-12 text-center space-y-4">
+                  <h1 className="text-5xl font-black text-[#66c0f4] drop-shadow-md tracking-tighter whitespace-normal break-keep">
+                    '<span className="text-white">{roomName || '무명'}</span>'
+                  </h1>
+                  <p className="text-2xl text-[#c7d5e0] font-black tracking-tight">
+                    {entrySource === 'creator' ? '모임이 개설되었습니다' : '모임에 초대되었습니다'}
+                  </p>
+                </div>
                 
                 <div className="w-full bg-[#1b2838] border-t-2 border-[#66c0f4] p-10 rounded-sm shadow-2xl space-y-8 text-center font-bold">
                   <div className="space-y-1 font-bold">
                     <h2 className="text-xl text-white font-black uppercase font-bold">닉네임 설정</h2>
                     <p className="text-xs text-[#c7d5e0]/40 font-bold uppercase tracking-widest font-bold">
-                      최대 8자까지 입력 가능합니다 (길게 짓지마라.)
+                      최대 8자까지 입력 가능합니다
                     </p>
                   </div>
                   <div className="space-y-4 font-bold">
@@ -749,70 +890,37 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="bg-[#171a21]/80 p-5 rounded-sm border border-black/50 shadow-inner select-none overflow-hidden font-bold">
-                  <div className="grid grid-cols-7 gap-1 text-center mb-6 opacity-30 font-bold">
-                    {['일','월','화','수','목','금','토'].map((d, i) => (
-                      <span key={i} className="text-[10px] font-black font-bold">{d}</span>
-                    ))}
-                  </div>
-                  
-                  <div className="grid grid-cols-7 gap-1.5 font-bold">
-                    {Array.from({length: getFirstDayOfMonth(year, month)}, (_, i) => (
-                      <div key={`pad-${i}`} className="aspect-square" />
-                    ))}
-                    {Array.from({length: getDaysInMonth(year, month)}, (_, i) => {
-                      const dayNum = i + 1; 
-                      const dateStr = formatDate(year, month, dayNum);
-                      const isPast = isPastDate(year, month, dayNum);
-                      const isToday = dateStr === todayStr;
-                      
-                      const isSelected = selectedDates.includes(dateStr);
-                      const othersCount = getOthersAvailable(dateStr).length;
-                      const displayCount = othersCount + (isSelected ? 1 : 0);
+                {renderCalendarGrid(false)}
 
-                      return (
-                        <div 
-                          key={i} 
-                          data-date={dateStr} 
-                          onClick={() => toggleDateSelection(dateStr)} 
-                          className={`aspect-square relative flex flex-col items-center justify-center rounded-sm transition-all border border-transparent font-bold cursor-pointer overflow-hidden
-                          ${isPast ? 'opacity-20 bg-transparent cursor-not-allowed' : 
-                            isSelected ? 'bg-[#66c0f4] text-[#171a21] shadow-lg' : 
-                            displayCount >= 3 ? 'bg-[#47bfff]/20 text-[#66c0f4]' : 'bg-[#2a3f5a]'}`}
-                        >
-                          <div className="absolute inset-0 flex flex-col items-center justify-center p-1">
-                            {isToday && !isSelected && (
-                              <span className="absolute top-1 left-1 w-1 h-1 rounded-full bg-red-400"></span>
-                            )}
-                            <span className={`text-xs font-black pointer-events-none ${isToday && !isSelected ? 'text-red-400' : ''}`}>
-                              {dayNum}
-                            </span>
-                            {displayCount > 0 && (
-                              <span className={`text-[8px] font-black pointer-events-none leading-none mt-0.5 ${isSelected ? 'text-[#171a21]' : 'text-[#66c0f4]'}`}>
-                                {displayCount}명
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="bg-[#1b2838] p-6 rounded-sm border border-white/5 min-h-[120px] flex flex-col gap-4 shadow-xl font-bold">
-                  {focusedDate ? (
-                    <div className="space-y-4 animate-in fade-in duration-300 font-bold text-left font-bold">
+                {focusedDate && (
+                  <div className="bg-[#1b2838] p-6 rounded-sm border border-white/5 min-h-[120px] flex flex-col gap-4 shadow-xl font-bold animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="space-y-4 font-bold text-left">
                       <span className="text-[10px] text-[#66c0f4] font-black uppercase tracking-widest text-nowrap font-bold">
                         {focusedDate.split('-')[1]}월 {focusedDate.split('-')[2]}일 ({getDayLabel(year, month, parseInt(focusedDate.split('-')[2]))}) 쌉가능한 사람
                       </span>
                       <div className="flex flex-wrap gap-2 text-left font-bold">
                         {selectedDates.includes(focusedDate) && (
-                          <div className="bg-[#66c0f4] text-[#171a21] px-3 py-1.5 rounded-sm text-[10px] font-black font-bold">
-                            {nickname} (나)
+                          <div 
+                            className="px-3 py-1.5 rounded-sm text-[11px] font-black shadow-md border"
+                            style={{ 
+                              backgroundColor: getUserColor(nickname) + '26', 
+                              color: getUserColor(nickname),
+                              borderColor: getUserColor(nickname) + '4D' 
+                            }}
+                          >
+                            {nickname} <span className="opacity-80 text-[9px]">(나)</span>
                           </div>
                         )}
                         {getOthersAvailable(focusedDate).map((name, idx) => (
-                          <div key={idx} className="bg-[#2a475e] text-white px-3 py-1.5 rounded-sm text-[10px] font-black border border-[#66c0f4]/10 font-bold">
+                          <div 
+                            key={idx} 
+                            className="px-3 py-1.5 rounded-sm text-[11px] font-black shadow-sm border"
+                            style={{ 
+                              backgroundColor: getUserColor(name) + '26', 
+                              color: getUserColor(name),
+                              borderColor: getUserColor(name) + '4D' 
+                            }}
+                          >
                             {name}
                           </div>
                         ))}
@@ -835,13 +943,8 @@ export default function App() {
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <div className="text-center py-6 opacity-30 flex flex-col items-center gap-3 font-bold">
-                      <Info size={20} />
-                      <p className="text-[10px] font-black uppercase font-bold">날짜를 눌러 의견을 남겨보세요</p>
-                    </div>
-                  )}
-                </div>
+                  </div>
+                )}
                 
                 <button 
                   onClick={saveSchedule} 
@@ -856,21 +959,43 @@ export default function App() {
 
         {/* ===================== RESULTS VIEW ===================== */}
         {view === 'results' && (
-          <div className="w-full max-w-md px-6 animate-in slide-in-from-right-4 duration-500 text-left font-bold text-nowrap font-bold">
-            <div className="mb-16 text-center space-y-2 relative font-bold">
-              <div className="absolute inset-0 bg-[#66c0f4]/5 blur-3xl rounded-full -z-10 font-bold"></div>
-              <p className="text-[10px] text-[#66c0f4] font-black uppercase tracking-[0.4em] mb-2 opacity-50 font-bold">모임 일정 결과</p>
-              <h1 className="text-6xl font-black text-white leading-none tracking-tighter drop-shadow-2xl whitespace-normal px-6 break-keep text-center font-bold">
-                {roomName || '결과 확인'}
+          <div className="w-full max-w-md px-6 animate-in slide-in-from-right-4 duration-500 text-left font-bold text-nowrap font-bold pb-24">
+            <div className="mb-10 text-center space-y-2 relative font-bold pt-8">
+              <h1 className="text-4xl font-black text-white leading-tight tracking-tighter drop-shadow-2xl whitespace-normal px-6 break-keep text-center font-bold">
+                <span className="text-[#66c0f4]">'</span>{roomName || '결과 확인'}<span className="text-[#66c0f4]">'</span>
               </h1>
-              <div className="flex justify-center items-center gap-4 mt-6 font-bold">
-                <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-[#66c0f4]/30 font-bold"></div>
-                <div className="h-1.5 w-1.5 rounded-full bg-[#66c0f4] font-bold"></div>
-                <div className="h-[1px] w-12 bg-gradient-to-l from-transparent to-[#66c0f4]/30 font-bold"></div>
-              </div>
             </div>
             
-            <div className="space-y-12 font-bold text-left font-bold">
+            {showFullCalendar && (
+              <div className="mb-12 bg-[#1b2838] p-5 rounded-sm shadow-2xl border border-[#66c0f4]/30 animate-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-white font-black tracking-tight">{monthName}</h3>
+                  <div className="flex gap-4">
+                    <button onClick={handlePrevMonth} className="text-[#4d5254] hover:text-[#66c0f4]"><ChevronLeft size={20}/></button>
+                    <button onClick={handleNextMonth} className="text-[#4d5254] hover:text-[#66c0f4]"><ChevronRight size={20}/></button>
+                  </div>
+                </div>
+                
+                {renderCalendarGrid(true)}
+
+                <div className="flex gap-3 mt-5">
+                  <button 
+                    onClick={() => setShowFullCalendar(false)} 
+                    className="flex-[1] py-3 bg-[#2a475e] text-[#c7d5e0] rounded-sm font-black text-xs uppercase hover:bg-[#3d5a7d] transition-all"
+                  >
+                    닫기
+                  </button>
+                  <button 
+                    onClick={() => { setView('room'); setShowFullCalendar(false); setStep(2); }} 
+                    className="flex-[2] py-3 bg-[#66c0f4] text-[#171a21] rounded-sm font-black text-xs uppercase active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2"
+                  >
+                    <Edit2 size={14} /> 일정 수정하기
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-8 font-bold text-left font-bold">
               {(() => {
                 const totalCount = allParticipants.length; 
                 const hasFull = topThreeDates.some(item => item.count === totalCount);
@@ -885,14 +1010,14 @@ export default function App() {
                         <p className="text-white text-lg font-black tracking-tight leading-tight whitespace-normal font-bold">
                           <span className="text-red-400 font-bold">{nearPerfectDate.name}</span>님만 오면 <span className="text-[#66c0f4] font-bold">{nearPerfectDate.date}</span>에 다 모입니다.
                         </p>
-                        <p className="text-red-400 text-sm font-bold">친구야 죽고싶지 않으면 조율해라</p>
+                        <p className="text-red-400 text-sm font-bold">친구야 조율해라</p>
                       </div>
                       {nearPerfectDate.name === nickname && (
                         <button 
                           onClick={() => handleAcceptSchedule(nearPerfectDate.dateStr)} 
                           className="w-full bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all text-sm uppercase mt-2 border border-white/20 font-bold"
                         >
-                          <Check size={18} /> 굴복하기
+                          <Check size={18} /> 일정에 동참하기
                         </button>
                       )}
                     </div>
@@ -902,41 +1027,80 @@ export default function App() {
               })()}
 
               <div className="space-y-6 font-bold text-left font-bold">
-                <h3 className="text-[11px] text-white font-black uppercase tracking-[0.3em] ml-1 flex items-center gap-3 font-bold text-left">
-                  <Trophy size={18} className="text-[#66c0f4]" /> 이 날이 베스트다 얘들아
-                </h3>
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <h3 className="text-[15px] text-white font-black uppercase tracking-widest flex items-center gap-2 font-bold text-left">
+                    <Trophy size={20} className="text-[#66c0f4]" /> 베스트 일정
+                  </h3>
+                  {!showFullCalendar && (
+                    <button 
+                      onClick={() => setShowFullCalendar(true)} 
+                      className="text-[11px] bg-[#2a475e] text-[#66c0f4] px-3 py-1.5 rounded-sm hover:bg-[#3d5a7d] transition-all font-black flex items-center gap-1 shadow-md"
+                    >
+                      전체 달력 보기 <CalendarDays size={12} className="ml-0.5" />
+                    </button>
+                  )}
+                </div>
                 
                 {topThreeDates.map((item, idx) => {
                   const isFull = item.count === allParticipants.length; 
                   const dayComments = roomData.comments?.[item.dateStr] || [];
+                  
+                  const participantsForDate = getOthersAvailable(item.dateStr);
+                  if (selectedDates.includes(item.dateStr)) participantsForDate.push(nickname);
+
                   return (
                     <div 
                       key={idx} 
-                      className={`p-7 rounded-sm border-l-4 shadow-2xl flex flex-col gap-4 font-bold text-left transition-all animate-in slide-in-from-bottom-2 ${isFull ? 'bg-[#1b2838] border-[#47bfff] ring-2 ring-[#47bfff]/20 scale-[1.02] z-10' : 'bg-[#1b2838] border-[#66c0f4] font-bold'}`} 
+                      className={`p-6 rounded-sm border-l-4 shadow-2xl flex flex-col gap-4 font-bold text-left transition-all animate-in slide-in-from-bottom-2 ${isFull ? 'bg-[#1b2838] border-[#47bfff] ring-2 ring-[#47bfff]/20 scale-[1.02] z-10' : 'bg-[#1b2838] border-[#66c0f4] font-bold'}`} 
                       style={{ animationDelay: `${idx * 100}ms` }}
                     >
-                      <div className="flex items-center gap-6 text-left font-bold">
-                        <div className={`w-14 h-14 rounded-sm flex items-center justify-center font-black text-3xl font-bold ${isFull ? 'bg-[#47bfff] text-[#171a21]' : (idx === 0 ? 'bg-[#66c0f4] text-[#171a21]' : 'bg-[#2a475e] text-[#c7d5e0]')}`}>
+                      <div className="flex items-start gap-5 text-left font-bold">
+                        <div className={`w-12 h-12 rounded-sm flex items-center justify-center font-black text-2xl font-bold shrink-0 ${isFull ? 'bg-[#47bfff] text-[#171a21]' : (idx === 0 ? 'bg-[#66c0f4] text-[#171a21]' : 'bg-[#2a475e] text-[#c7d5e0]')}`}>
                           {idx + 1}
                         </div>
                         <div className="text-left font-bold relative flex-1 font-bold">
-                          <div className="flex items-center gap-2 font-bold">
-                            <p className="text-xl text-white font-black text-left leading-tight font-bold">{item.date}</p>
-                            {isFull && <Flame size={18} className="text-[#47bfff] animate-pulse" />}
-                          </div>
-                          <p className={`text-[11px] font-black uppercase text-left tracking-wide mt-1 font-bold ${isFull ? 'text-[#47bfff]' : 'text-[#66c0f4]'}`}>
-                            {isFull ? '전원 참여 가능 🔥' : `${item.count}명 참여 가능`}
-                          </p>
+                          <p className="text-xl text-white font-black text-left leading-tight font-bold">{item.date}</p>
+                          
+                          {isFull ? (
+                            <div className="inline-flex items-center gap-1.5 bg-[#47bfff]/20 text-[#47bfff] px-2.5 py-1 rounded-sm text-[11px] font-black border border-[#47bfff]/30 mt-2">
+                              전원 참여 가능 <Flame size={12} className="text-[#47bfff] animate-pulse" />
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {participantsForDate.map((pName, i) => (
+                                <span 
+                                  key={i} 
+                                  className="px-2 py-1 rounded-sm text-[10px] font-black border shadow-sm" 
+                                  style={{ 
+                                    backgroundColor: getUserColor(pName) + '26', 
+                                    color: getUserColor(pName), 
+                                    borderColor: getUserColor(pName) + '4D' 
+                                  }}
+                                >
+                                  {pName} {pName === nickname && <span className="opacity-80 text-[8px]">(나)</span>}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       {dayComments.length > 0 && (
-                        <div className="mt-2 space-y-2 border-t border-white/5 pt-4 font-bold">
+                        <div className="mt-1 space-y-2 border-t border-white/5 pt-4 font-bold">
                           <div className="flex flex-col gap-2">
                             {dayComments.map((c: any, i: number) => (
-                              <div key={i} className="flex gap-2 items-start whitespace-normal font-bold">
-                                <span className="text-[10px] text-[#66c0f4] font-black shrink-0 mt-0.5 font-bold">[{c.name}]</span>
-                                <span className="text-[11px] text-[#c7d5e0]/60 font-bold leading-relaxed font-bold">{c.text}</span>
+                              <div key={i} className="flex gap-2 items-center whitespace-normal font-bold">
+                                <span 
+                                  className="w-2 h-2 rounded-full shrink-0 shadow-sm" 
+                                  style={{ backgroundColor: getUserColor(c.name) }}
+                                ></span>
+                                <span 
+                                  className="text-[10px] font-black shrink-0 font-bold"
+                                  style={{ color: getUserColor(c.name) }}
+                                >
+                                  {c.name} :
+                                </span>
+                                <span className="text-[11px] text-[#c7d5e0]/80 font-bold leading-relaxed font-bold">{c.text}</span>
                               </div>
                             ))}
                           </div>
@@ -947,16 +1111,16 @@ export default function App() {
                 })}
               </div>
 
-              <div className="flex gap-4 mb-10 items-stretch font-bold pt-12">
+              <div className="flex gap-4 mb-10 items-stretch font-bold pt-8">
                 <button 
                   onClick={goToHome} 
-                  className="flex-[2] py-7 bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white rounded-sm font-black text-sm uppercase shadow-xl active:scale-95 transition-all font-bold"
+                  className="flex-[2] py-6 bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white rounded-sm font-black text-sm uppercase shadow-xl active:scale-95 transition-all font-bold"
                 >
                   처음으로
                 </button>
                 <button 
                   onClick={handleShare} 
-                  className="flex-[3] py-7 bg-[#1b2838] border border-[#66c0f4]/30 text-[#c7d5e0] rounded-sm font-black text-sm uppercase hover:bg-[#213247] active:scale-95 transition-all flex items-center justify-center gap-3 shadow-xl font-bold"
+                  className="flex-[3] py-6 bg-[#1b2838] border border-[#66c0f4]/30 text-[#c7d5e0] rounded-sm font-black text-sm uppercase hover:bg-[#213247] active:scale-95 transition-all flex items-center justify-center gap-3 shadow-xl font-bold"
                 >
                   <Share2 size={20} className="text-[#66c0f4]" /> 
                   <span>초대 링크 복사</span>
