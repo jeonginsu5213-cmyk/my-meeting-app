@@ -650,7 +650,7 @@ export default function App() {
                   </label>
                   <input 
                     type="text" 
-                    placeholder="예: 맛있는거 사주는 모임" 
+                    placeholder="예: 인수 맛있는거 사주는 모임" 
                     className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" 
                     value={roomName} 
                     onChange={(e) => setRoomName(e.target.value)} 
@@ -836,7 +836,7 @@ export default function App() {
                   <div className="space-y-1 font-bold">
                     <h2 className="text-xl text-white font-black uppercase font-bold">닉네임 설정</h2>
                     <p className="text-xs text-[#c7d5e0]/40 font-bold uppercase tracking-widest font-bold">
-                      최대 8자까지 입력 가능합니다
+                      최대 8자까지 입력 가능합니다 (길게 짓지마라.)
                     </p>
                   </div>
                   <div className="space-y-4 font-bold">
@@ -1004,20 +1004,20 @@ export default function App() {
                     <div className="bg-red-500/10 border-2 border-red-500/30 p-6 rounded-sm shadow-xl flex flex-col gap-4 animate-in zoom-in duration-300 font-bold">
                       <div className="flex items-center gap-3 text-red-500 font-bold">
                         <AlertTriangle size={24} className="animate-bounce" />
-                        <span className="text-[11px] font-black uppercase font-bold">조율 긴급 알림</span>
+                        <span className="text-[11px] font-black uppercase font-bold">조율 알림</span>
                       </div>
                       <div className="space-y-2 font-bold">
                         <p className="text-white text-lg font-black tracking-tight leading-tight whitespace-normal font-bold">
                           <span className="text-red-400 font-bold">{nearPerfectDate.name}</span>님만 오면 <span className="text-[#66c0f4] font-bold">{nearPerfectDate.date}</span>에 다 모입니다.
                         </p>
-                        <p className="text-red-400 text-sm font-bold">친구야 조율해라</p>
+                        <p className="text-red-400 text-sm font-bold">친구야 죽고싶지 않으면 조율해라</p>
                       </div>
                       {nearPerfectDate.name === nickname && (
                         <button 
                           onClick={() => handleAcceptSchedule(nearPerfectDate.dateStr)} 
                           className="w-full bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all text-sm uppercase mt-2 border border-white/20 font-bold"
                         >
-                          <Check size={18} /> 일정에 동참하기
+                          <Check size={18} /> 굴복하기
                         </button>
                       )}
                     </div>
