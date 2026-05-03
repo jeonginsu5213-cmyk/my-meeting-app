@@ -81,12 +81,19 @@ export default function App() {
   const todayStr = formatDate(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
   const isPastDate = (y: number, m: number, d: number) => new Date(y, m, d).getTime() < todayObj.getTime();
 
-  useEffect(() => { 
-    if (view === 'home') { 
-      setRoomName(''); 
-      setIsEditMode(false); 
-    } 
-  }, [view]);
+  // [기능 추가] 데이터를 완벽하게 리셋하고 홈으로 돌아가는 함수
+  const goToHome = () => {
+    const newUrl = `${window.location.origin}${window.location.pathname}`;
+    window.history.replaceState({ path: newUrl }, '', newUrl);
+    
+    setView('home');
+    setRoomName('');
+    setNickname('');
+    setSelectedDates([]);
+    setMyComments({});
+    setCurrentRoomId('');
+    setIsEditMode(false);
+  };
 
   useEffect(() => { 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => { 
@@ -96,6 +103,48 @@ export default function App() {
     return () => unsubscribe(); 
   }, []);
 
+  // [수정] DB에서 날짜 데이터를 확실히 가져와서 화면에 복구하는 핵심 함수
+  const loadRoomDataAndEnter = async (rId: string, nick: string, rName: string) => {
+    setCurrentRoomId(rId);
+    setNickname(nick);
+    if (rName) setRoomName(rName);
+
+    // 주소창 업데이트 (새로고침 대비)
+    const newUrl = `${window.location.origin}${window.location.pathname}?roomId=${rId}`;
+    window.history.replaceState({ path: newUrl }, '', newUrl);
+
+    // DB 데이터 강제 호출
+    const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rId);
+    const roomSnap = await getDoc(roomDocRef);
+    
+    if (roomSnap.exists()) {
+      const data = roomSnap.data() as any;
+      setRoomData(data);
+      if (data.name) setRoomName(data.name);
+
+      // 내 날짜 배열 셋팅
+      if (data.participants?.[nick]) {
+        setSelectedDates(data.participants[nick]);
+      } else {
+        setSelectedDates([]);
+      }
+
+      // 내 코멘트 셋팅
+      const oldComments: Record<string, string> = {};
+      Object.entries(data.comments || {}).forEach(([date, list]: any) => {
+        const myC = list.find((c: any) => c.name === nick);
+        if (myC) oldComments[date] = myC.text;
+      });
+      setMyComments(oldComments);
+    } else {
+      setSelectedDates([]);
+      setMyComments({});
+    }
+
+    setView('room');
+    setStep(2);
+  };
+
   useEffect(() => {
     if (!user) return;
     const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
@@ -104,17 +153,20 @@ export default function App() {
       setMyMeetings(meetings); 
       setIsLoading(false); 
 
+      // 앱 최초 로드 시 URL 파라미터 처리
       if (!urlProcessedRef.current) {
         urlProcessedRef.current = true;
         const params = new URLSearchParams(window.location.search);
         const roomIdFromUrl = params.get('roomId');
+        
         if (roomIdFromUrl) {
-          const isAlreadyJoined = meetings.some((m: any) => m.id === roomIdFromUrl);
-          if (isAlreadyJoined) {
-            window.history.replaceState({}, document.title, window.location.pathname);
-            setView('home');
-            showMessage("이미 참여 중인 모임입니다. 내 약속에서 확인하세요.");
+          const joinedMeeting = meetings.find((m: any) => m.id === roomIdFromUrl);
+          if (joinedMeeting) {
+            // [수정] 이미 참여중이면 데이터 모두 불러와서 바로 달력 화면으로 이동!
+            loadRoomDataAndEnter(roomIdFromUrl, joinedMeeting.savedNickname, joinedMeeting.name);
+            showMessage("참여 중인 모임으로 자동 이동했습니다.");
           } else {
+            // 처음 온 방이면 닉네임 설정창으로!
             setCurrentRoomId(roomIdFromUrl); 
             setEntrySource('invitee'); 
             setNickname(''); 
@@ -127,6 +179,7 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
+  // 실시간 동기화 (내가 아닌 다른 사람이 수정했을 때 룸 데이터 업데이트)
   useEffect(() => {
     if (!user || !currentRoomId) return;
     const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomId);
@@ -167,6 +220,10 @@ export default function App() {
         }) 
       }, { merge: true });
 
+      // 생성 시 주소창에 방 번호 박아주기 (새로고침 방지용)
+      const newUrl = `${window.location.origin}${window.location.pathname}?roomId=${newId}`;
+      window.history.replaceState({ path: newUrl }, '', newUrl);
+
       setCurrentRoomId(newId); 
       setEntrySource('creator'); 
       setNickname(''); 
@@ -199,7 +256,7 @@ export default function App() {
       const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomId);
       const mergedComments = { ...(roomData.comments || {}) };
       
-      // 기존 코멘트 제거
+      // 기존 코멘트 제거 (취소된 날짜 정리)
       Object.keys(mergedComments).forEach(date => { 
         mergedComments[date] = mergedComments[date].filter((c: any) => c.name !== nickname); 
       });
@@ -416,12 +473,8 @@ export default function App() {
       setTempEditName(m.name); 
       setTempEditNickname(m.savedNickname);
     } else {
-      setRoomName(m.name); 
-      setCurrentRoomId(m.id); 
-      setEntrySource('creator'); 
-      setNickname(m.savedNickname); 
-      setView('room'); 
-      setStep(2);
+      // [수정] 방을 클릭했을 때 DB 데이터 동기화 함수 실행!
+      loadRoomDataAndEnter(m.id, m.savedNickname, m.name);
     }
   };
 
@@ -460,7 +513,7 @@ export default function App() {
                   </label>
                   <input 
                     type="text" 
-                    placeholder="예: 맛있는거 사주는 모임" 
+                    placeholder="예: 인수 맛있는거 사주는 모임" 
                     className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" 
                     value={roomName} 
                     onChange={(e) => setRoomName(e.target.value)} 
@@ -642,7 +695,7 @@ export default function App() {
                   <div className="space-y-1 font-bold">
                     <h2 className="text-xl text-white font-black uppercase font-bold">닉네임 설정</h2>
                     <p className="text-xs text-[#c7d5e0]/40 font-bold uppercase tracking-widest font-bold">
-                      최대 8자까지 입력 가능합니다
+                      최대 8자까지 입력 가능합니다 (길게 짓지마라.)
                     </p>
                   </div>
                   <div className="space-y-4 font-bold">
@@ -832,14 +885,14 @@ export default function App() {
                         <p className="text-white text-lg font-black tracking-tight leading-tight whitespace-normal font-bold">
                           <span className="text-red-400 font-bold">{nearPerfectDate.name}</span>님만 오면 <span className="text-[#66c0f4] font-bold">{nearPerfectDate.date}</span>에 다 모입니다.
                         </p>
-                        <p className="text-red-400 text-sm font-bold">친구야 조율해라</p>
+                        <p className="text-red-400 text-sm font-bold">친구야 죽고싶지 않으면 조율해라</p>
                       </div>
                       {nearPerfectDate.name === nickname && (
                         <button 
                           onClick={() => handleAcceptSchedule(nearPerfectDate.dateStr)} 
                           className="w-full bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all text-sm uppercase mt-2 border border-white/20 font-bold"
                         >
-                          <Check size={18} /> 네 형님
+                          <Check size={18} /> 굴복하기
                         </button>
                       )}
                     </div>
@@ -850,7 +903,7 @@ export default function App() {
 
               <div className="space-y-6 font-bold text-left font-bold">
                 <h3 className="text-[11px] text-white font-black uppercase tracking-[0.3em] ml-1 flex items-center gap-3 font-bold text-left">
-                  <Trophy size={18} className="text-[#66c0f4]" /> 베스트 일정을 확인하세요
+                  <Trophy size={18} className="text-[#66c0f4]" /> 이 날이 베스트다 얘들아
                 </h3>
                 
                 {topThreeDates.map((item, idx) => {
@@ -896,7 +949,7 @@ export default function App() {
 
               <div className="flex gap-4 mb-10 items-stretch font-bold pt-12">
                 <button 
-                  onClick={() => setView('home')} 
+                  onClick={goToHome} 
                   className="flex-[2] py-7 bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white rounded-sm font-black text-sm uppercase shadow-xl active:scale-95 transition-all font-bold"
                 >
                   처음으로
