@@ -2,18 +2,13 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
-  Layout, 
   Users, 
   Trophy, 
   PlusCircle, 
   ChevronLeft, 
   ChevronRight,
-  Calendar as CalendarIcon,
-  Play,
   Info,
   Loader2,
-  Search,
-  Bell,
   Crown,
   User as UserIcon,
   Share2,
@@ -26,13 +21,14 @@ import {
   X,
   Save,
   Edit2,
-  Lock
+  Lock,
+  Trash2
 } from 'lucide-react';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, arrayUnion, getDoc, updateDoc, deleteField } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, onSnapshot, arrayUnion, getDoc, updateDoc, deleteField, deleteDoc } from 'firebase/firestore';
 
-// --- 1. Firebase 설정 (배포 전 본인의 키값으로 교체하세요) ---
+// --- Firebase 설정 (배포 전 본인의 키값으로 교체하세요) ---
 const firebaseConfig = {
   apiKey: "AIzaSyDd-DX7f2gYFAj70hcwTlHeT11UeIs-itg",
   authDomain: "when-we-meet-27fc2.firebaseapp.com",
@@ -69,16 +65,12 @@ export default function App() {
   const [editingMeeting, setEditingMeeting] = useState<any>(null);
   const [tempEditName, setTempEditName] = useState('');
   const [tempEditNickname, setTempEditNickname] = useState('');
+  
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [currentDate, setCurrentDate] = useState(new Date()); 
   
-  // 드래그 및 터치 상태 동기화
-  const dragRef = useRef({ isDragging: false, startIdx: -1, mode: 'add' as 'add' | 'remove', range: [] as string[] });
-  const [dragVisuals, setDragVisuals] = useState({ isDragging: false, mode: 'add', range: [] as string[] });
-  
-  // URL 중복 처리 방지를 위한 Ref
   const urlProcessedRef = useRef(false);
-
   const calendarGridRef = useRef<HTMLDivElement>(null);
 
   const year = currentDate.getFullYear();
@@ -90,7 +82,6 @@ export default function App() {
   const formatDate = (y: number, m: number, d: number) => `${y}-${(m + 1).toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
   const getDayLabel = (y: number, m: number, d: number) => ['일', '월', '화', '수', '목', '금', '토'][new Date(y, m, d).getDay()];
 
-  // 오늘 날짜 및 지난 날짜 계산 로직
   const todayObj = new Date();
   todayObj.setHours(0, 0, 0, 0);
   const todayStr = formatDate(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
@@ -111,7 +102,6 @@ export default function App() {
     return () => unsubscribe(); 
   }, []);
 
-  // History 데이터를 불러온 후 초대 링크 접속 여부를 판별
   useEffect(() => {
     if (!user) return;
     const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
@@ -170,7 +160,7 @@ export default function App() {
       const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newId);
       await setDoc(roomDocRef, { name: roomName, createdAt: new Date().toISOString(), participants: {}, comments: {} });
       const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
-      await setDoc(historyDocRef, { meetings: arrayUnion({ id: newId, name: roomName, role: '방장', savedNickname: '방장' }) }, { merge: true });
+      await setDoc(historyDocRef, { meetings: arrayUnion({ id: newId, name: roomName, role: '방장', members: 1, savedNickname: '방장' }) }, { merge: true });
       setCurrentRoomId(newId); 
       setEntrySource('creator'); 
       setNickname(''); 
@@ -214,14 +204,22 @@ export default function App() {
       const meetings = historySnap.exists() ? historySnap.data().meetings || [] : [];
       const isAlready = meetings.some((m: any) => m.id === currentRoomId);
       
+      const currentParticipantsCount = Object.keys(roomData?.participants || {}).length;
+      const membersCount = roomData?.participants?.[nickname] ? currentParticipantsCount : currentParticipantsCount + 1;
+
       if (isAlready) {
-        const updated = meetings.map((m: any) => m.id === currentRoomId ? { ...m, savedNickname: nickname } : m);
+        const updated = meetings.map((m: any) => m.id === currentRoomId ? { ...m, savedNickname: nickname, members: membersCount } : m);
         await setDoc(historyDocRef, { meetings: updated }, { merge: true });
       } else {
-        await setDoc(historyDocRef, { meetings: arrayUnion({ id: currentRoomId, name: roomName, role: '멤버', savedNickname: nickname }) }, { merge: true });
+        await setDoc(historyDocRef, { meetings: arrayUnion({ id: currentRoomId, name: roomName, role: '멤버', members: membersCount, savedNickname: nickname }) }, { merge: true });
       }
       setView('results'); showMessage("일정이 동기화되었습니다.");
     } catch (e) { showMessage("저장 실패"); }
+  };
+
+  const closeEditModal = () => {
+    setEditingMeeting(null);
+    setDeleteConfirmId(null);
   };
 
   const handleUpdateMeeting = async () => {
@@ -261,9 +259,30 @@ export default function App() {
       if (currentRoomId === editingMeeting.id) setNickname(tempEditNickname);
       
       showMessage("정보가 수정되었습니다."); 
-      setEditingMeeting(null); 
+      closeEditModal();
       setIsEditMode(false);
     } catch (e) { showMessage("수정 실패"); }
+  };
+
+  const confirmDeleteMeeting = async () => {
+    if (!user || !editingMeeting || editingMeeting.role !== '방장') return;
+    try {
+      const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', editingMeeting.id);
+      await deleteDoc(roomDocRef);
+
+      const historyDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history_collection', 'data');
+      const historySnap = await getDoc(historyDocRef);
+      if (historySnap.exists()) {
+        const updatedMeetings = historySnap.data().meetings.filter((m: any) => m.id !== editingMeeting.id);
+        await setDoc(historyDocRef, { meetings: updatedMeetings }, { merge: true });
+      }
+
+      showMessage("모임이 삭제되었습니다.");
+      closeEditModal();
+      setIsEditMode(false);
+    } catch (e) {
+      showMessage("모임 삭제 중 오류가 발생했습니다.");
+    }
   };
 
   const getOthersAvailable = (dateStr: string) => {
@@ -317,44 +336,17 @@ export default function App() {
   const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
   const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
 
-  const handleInputStart = (e: any, dateStr: string) => {
+  const toggleDateSelection = (dateStr: string) => {
     if (isPastDate(year, month, parseInt(dateStr.split('-')[2]))) return;
-    if (e.type === 'touchstart') { e.preventDefault(); }
-    const idx = parseInt(dateStr.split('-')[2], 10) - 1;
-    const mode = selectedDates.includes(dateStr) ? 'remove' : 'add';
-    const range = [dateStr];
-    dragRef.current = { isDragging: true, startIdx: idx, mode, range };
-    setDragVisuals({ isDragging: true, mode, range });
+    
+    setSelectedDates(prev => {
+      if (prev.includes(dateStr)) {
+        return prev.filter(d => d !== dateStr); 
+      } else {
+        return [...prev, dateStr]; 
+      }
+    });
     setFocusedDate(dateStr);
-  };
-
-  const handleInputMove = (clientX: number, clientY: number) => {
-    if (!dragRef.current.isDragging) return;
-    const element = document.elementFromPoint(clientX, clientY);
-    const ds = element?.closest('[data-date]')?.getAttribute('data-date');
-    if (ds) {
-      const curIdx = parseInt(ds.split('-')[2], 10) - 1;
-      const startIdx = dragRef.current.startIdx;
-      const min = Math.min(startIdx, curIdx); 
-      const max = Math.max(startIdx, curIdx);
-      const range = []; 
-      for (let i = min; i <= max; i++) {
-        if (!isPastDate(year, month, i + 1)) range.push(formatDate(year, month, i + 1));
-      }
-      if (range.length !== dragRef.current.range.length) {
-        dragRef.current.range = range;
-        setDragVisuals({ isDragging: true, mode: dragRef.current.mode, range });
-        setFocusedDate(ds);
-      }
-    }
-  };
-
-  const handleInputEnd = () => {
-    if (!dragRef.current.isDragging) return;
-    const { mode, range } = dragRef.current;
-    setSelectedDates(prev => mode === 'add' ? Array.from(new Set([...prev, ...range])) : prev.filter(d => !range.includes(d)));
-    dragRef.current = { isDragging: false, startIdx: -1, mode: 'add', range: [] };
-    setDragVisuals({ isDragging: false, mode: 'add', range: [] });
   };
 
   const handleMeetingClick = (m: any) => {
@@ -421,6 +413,12 @@ export default function App() {
                         {m.role === '방장' ? <span className="text-[9px] bg-[#66c0f4] text-[#171a21] px-1.5 py-0.5 font-black rounded-sm uppercase">방장</span> : <span className="text-[9px] bg-[#4d5254] text-[#c7d5e0] px-1.5 py-0.5 font-black rounded-sm uppercase">멤버</span>}
                       </div>
                       <div className="flex items-center gap-4 font-bold">
+                        {!isEditMode && (
+                          <div className="flex items-center gap-1.5 text-[#4d5254] group-hover:text-[#66c0f4] transition-colors font-bold">
+                            <Users size={16} />
+                            <span className="text-sm font-bold">{m.members || 1}</span>
+                          </div>
+                        )}
                         {isEditMode ? <Edit2 size={18} className="text-[#66c0f4] animate-bounce-subtle" /> : <ChevronRight size={18} className="text-[#4d5254] group-hover:text-[#66c0f4]" />}
                       </div>
                     </div>
@@ -434,13 +432,13 @@ export default function App() {
         {/* --- 편집 모달 --- */}
         {editingMeeting && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#171a21]/95 backdrop-blur-md animate-in fade-in duration-300 font-bold">
-            <div className="w-full max-w-md bg-[#1b2838] border-t-2 border-[#66c0f4] rounded-sm shadow-2xl p-8 space-y-8 font-bold">
+            <div className="w-full max-w-md bg-[#1b2838] border-t-2 border-[#66c0f4] rounded-sm shadow-2xl p-8 space-y-8 font-bold flex flex-col">
               <div className="flex items-center justify-between font-bold">
                 <div className="flex items-center gap-3 font-bold">
                   <Settings size={20} className="text-[#66c0f4]" />
                   <h2 className="text-xl text-white font-black uppercase font-bold">모임 설정 수정</h2>
                 </div>
-                <button onClick={() => setEditingMeeting(null)}><X size={24} /></button>
+                <button onClick={closeEditModal} className="text-[#4d5254] hover:text-white transition-colors"><X size={24} /></button>
               </div>
               <div className="space-y-6 font-bold">
                 <div className="space-y-2 text-left font-bold">
@@ -458,10 +456,43 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
               <div className="flex gap-3 pt-4 font-bold">
-                <button onClick={() => setEditingMeeting(null)} className="flex-1 py-4 bg-[#2a475e] text-[#c7d5e0] rounded-sm font-black text-xs uppercase hover:bg-[#3d5a7d] transition-all font-bold">취소</button>
-                <button onClick={handleUpdateMeeting} disabled={!tempEditName || !tempEditNickname} className="flex-1 py-4 bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white rounded-sm font-black text-xs uppercase active:scale-95 shadow-lg font-bold"> <Save size={16} /> 변경사항 저장 </button>
+                <button onClick={closeEditModal} className="flex-1 py-4 bg-[#2a475e] text-[#c7d5e0] rounded-sm font-black text-xs uppercase hover:bg-[#3d5a7d] transition-all font-bold">
+                  취소
+                </button>
+                <button onClick={handleUpdateMeeting} disabled={!tempEditName || !tempEditNickname} className="flex-1 py-4 bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white rounded-sm font-black text-xs uppercase active:scale-95 disabled:opacity-50 transition-all shadow-lg font-bold flex items-center justify-center gap-2"> 
+                  <Save size={16} /> 변경사항 저장 
+                </button>
               </div>
+
+              {editingMeeting.role === '방장' && (
+                <div className="pt-6 border-t border-white/10 mt-2">
+                  {!deleteConfirmId ? (
+                    <button 
+                      onClick={() => setDeleteConfirmId(editingMeeting.id)} 
+                      className="w-full py-3 text-[#ff4d4f] bg-[#ff4d4f]/10 rounded-sm font-black text-xs uppercase hover:bg-[#ff4d4f]/20 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Trash2 size={16} /> 모임 삭제하기
+                    </button>
+                  ) : (
+                    <div className="flex gap-2 animate-in fade-in zoom-in-95 duration-200">
+                      <button 
+                        onClick={() => setDeleteConfirmId(null)} 
+                        className="flex-1 py-3 text-[#c7d5e0] bg-[#2a475e] rounded-sm font-black text-xs uppercase hover:bg-[#3d5a7d] transition-all"
+                      >
+                        취소
+                      </button>
+                      <button 
+                        onClick={confirmDeleteMeeting} 
+                        className="flex-[2] py-3 text-white bg-[#ff4d4f] rounded-sm font-black text-xs uppercase hover:bg-[#ff4d4f]/90 transition-all flex items-center justify-center gap-2 shadow-lg"
+                      >
+                        <AlertTriangle size={16} /> 정말 삭제할게요
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -512,13 +543,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="bg-[#171a21]/80 p-5 rounded-sm border border-black/50 shadow-inner select-none touch-none overflow-hidden font-bold" 
-                     onMouseMove={(e) => handleInputMove(e.clientX, e.clientY)} 
-                     onMouseUp={handleInputEnd} 
-                     onMouseLeave={handleInputEnd} 
-                     onTouchMove={(e) => { if (e.touches[0]) handleInputMove(e.touches[0].clientX, e.touches[0].clientY); }} 
-                     onTouchEnd={handleInputEnd}>
-                  
+                <div className="bg-[#171a21]/80 p-5 rounded-sm border border-black/50 shadow-inner select-none overflow-hidden font-bold">
                   <div className="grid grid-cols-7 gap-1 text-center mb-6 opacity-30 font-bold">
                     {['일','월','화','수','목','금','토'].map((d, i) => (<span key={i} className="text-[10px] font-black font-bold">{d}</span>))}
                   </div>
@@ -530,23 +555,21 @@ export default function App() {
                       const dateStr = formatDate(year, month, dayNum);
                       const isPast = isPastDate(year, month, dayNum);
                       const isToday = dateStr === todayStr;
+                      
                       const isSelected = selectedDates.includes(dateStr);
-                      const inDragRange = dragVisuals.isDragging && dragVisuals.range.includes(dateStr);
-                      const displayActive = inDragRange ? dragVisuals.mode === 'add' : isSelected;
                       const othersCount = getOthersAvailable(dateStr).length;
-                      const displayCount = othersCount + (displayActive ? 1 : 0);
+                      const displayCount = othersCount + (isSelected ? 1 : 0);
 
                       return (
                         <div key={i} data-date={dateStr} 
-                          onMouseDown={(e) => handleInputStart(e, dateStr)} 
-                          onTouchStart={(e) => handleInputStart(e, dateStr)} 
-                          className={`aspect-square relative flex flex-col items-center justify-between py-2 rounded-sm transition-all border border-transparent font-bold 
+                          onClick={() => toggleDateSelection(dateStr)} 
+                          className={`aspect-square relative flex flex-col items-center justify-between py-2 rounded-sm transition-all border border-transparent font-bold cursor-pointer
                           ${isPast ? 'opacity-20 bg-transparent cursor-not-allowed' : 
-                            displayActive ? 'bg-[#66c0f4] text-[#171a21]' : 
-                            displayCount >= 3 ? 'bg-[#47bfff]/20 text-[#66c0f4]' : 'bg-[#2a3f5a]'}`}>
-                          {isToday && !displayActive && <span className="absolute top-1 left-1 w-1 h-1 rounded-full bg-red-400"></span>}
-                          <span className={`text-xs font-black pointer-events-none ${isToday && !displayActive ? 'text-red-400' : ''}`}>{dayNum}</span>
-                          <span className={`text-[8px] font-black pointer-events-none mt-auto ${displayActive ? 'text-[#171a21]' : 'text-[#66c0f4]'}`}>{displayCount > 0 ? `${displayCount}명` : ''}</span>
+                            isSelected ? 'bg-[#66c0f4] text-[#171a21] scale-105 z-10 shadow-lg' : 
+                            displayCount >= 3 ? 'bg-[#47bfff]/20 text-[#66c0f4] active:scale-95' : 'bg-[#2a3f5a] active:scale-95'}`}>
+                          {isToday && !isSelected && <span className="absolute top-1 left-1 w-1 h-1 rounded-full bg-red-400"></span>}
+                          <span className={`text-xs font-black pointer-events-none ${isToday && !isSelected ? 'text-red-400' : ''}`}>{dayNum}</span>
+                          <span className={`text-[8px] font-black pointer-events-none mt-auto ${isSelected ? 'text-[#171a21]' : 'text-[#66c0f4]'}`}>{displayCount > 0 ? `${displayCount}명` : ''}</span>
                         </div>
                       );
                     })}
