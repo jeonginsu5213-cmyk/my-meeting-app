@@ -387,7 +387,7 @@ export default function App() {
               <div className="space-y-4 text-left">
                 <div className="space-y-2">
                   <label className="text-[11px] font-black text-[#c7d5e0]/30 uppercase tracking-widest block font-bold">새 모임 이름</label>
-                  <input type="text" placeholder="예: 맛있는거 사주는 모임" className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" value={roomName} onChange={(e) => setRoomName(e.target.value)} />
+                  <input type="text" placeholder="예: 인수 맛있는거 사주는 모임" className="w-full bg-[#2a3f5a] border-none text-white rounded-sm p-4 focus:ring-2 focus:ring-[#66c0f4] outline-none font-bold placeholder:text-[#4d5254]" value={roomName} onChange={(e) => setRoomName(e.target.value)} />
                 </div>
               </div>
               <button onClick={createMeeting} disabled={!roomName || !user} className="w-full bg-gradient-to-r from-[#47bfff] to-[#1a44c2] text-white font-black py-5 rounded-sm uppercase shadow-xl active:scale-95 disabled:opacity-30 transition-all flex items-center justify-center gap-3 font-bold">
@@ -509,7 +509,7 @@ export default function App() {
                 <div className="w-full bg-[#1b2838] border-t-2 border-[#66c0f4] p-10 rounded-sm shadow-2xl space-y-8 text-center font-bold">
                   <div className="space-y-1 font-bold">
                     <h2 className="text-xl text-white font-black uppercase font-bold">닉네임 설정</h2>
-                    <p className="text-xs text-[#c7d5e0]/40 font-bold uppercase tracking-widest font-bold">최대 8자까지 입력 가능합니다 (내맘임)</p>
+                    <p className="text-xs text-[#c7d5e0]/40 font-bold uppercase tracking-widest font-bold">최대 8자까지 입력 가능합니다 (길게 짓지마라.)</p>
                   </div>
                   <div className="space-y-4 font-bold">
                     <div className="relative font-bold">
@@ -592,7 +592,7 @@ export default function App() {
                              <MessageSquare size={12} className="text-[#66c0f4]" />
                              <span className="text-[10px] text-[#c7d5e0]/50 font-black uppercase font-bold">한 줄 코멘트 남기기</span>
                            </div>
-                           <input type="text" placeholder="예: 이 날 점심 먹고 가능할듯" className="w-full bg-[#171a21] border border-white/5 text-white rounded-sm p-3 text-xs outline-none focus:border-[#66c0f4]/50 transition-all font-bold placeholder:text-[#4d5254] font-bold" value={myComments[focusedDate] || ''} onChange={(e) => setMyComments({...myComments, [focusedDate]: e.target.value})} maxLength={30} />
+                           <input type="text" placeholder="예: 이 날 병원 예약 있어서 오후에 가능" className="w-full bg-[#171a21] border border-white/5 text-white rounded-sm p-3 text-xs outline-none focus:border-[#66c0f4]/50 transition-all font-bold placeholder:text-[#4d5254] font-bold" value={myComments[focusedDate] || ''} onChange={(e) => setMyComments({...myComments, [focusedDate]: e.target.value})} maxLength={30} />
                          </div>
                        )}
                     </div>
